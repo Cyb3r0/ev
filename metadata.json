@@ -1,0 +1,9 @@
+{
+  "name": "JAX AR - حي جاكس بالدرعية",
+  "description": "تجربة الواقع المعزز (AR) الاستكشافية في حي جاكس للفنون بالدرعية - استكشاف المنحوتات التفاعلية، مسارات الهناجر، والمرشد الذكي",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
