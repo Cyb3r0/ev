@@ -27,6 +27,8 @@ export interface Artwork {
   audioDurationSeconds: number;
   initialDistanceMeters: number;
   compassBearingDeg: number;
+  lat: number;
+  lng: number;
   image: string;
   walkingDirectionAr: string;
   walkingDirectionEn: string;
@@ -47,6 +49,8 @@ export interface HangarLocation {
   mapY: number;
   distanceMeters: number;
   bearingDeg: number;
+  lat: number;
+  lng: number;
   featuredArtworkId: string;
   image: string;
 }
@@ -89,6 +93,27 @@ export interface JaxEvent {
   image: string;
 }
 
+// Calculate real-world distance between GPS points
+export function calculateGpsDistance(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number
+): number {
+  const R = 6371e3; // metres
+  const φ1 = (lat1 * Math.PI) / 180;
+  const φ2 = (lat2 * Math.PI) / 180;
+  const Δφ = ((lat2 - lat1) * Math.PI) / 180;
+  const Δλ = ((lon2 - lon1) * Math.PI) / 180;
+
+  const a =
+    Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+    Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return Math.round(R * c);
+}
+
 export const JAX_ARTWORKS: Artwork[] = [
   {
     id: 'art_horizon_portal',
@@ -114,9 +139,11 @@ export const JAX_ARTWORKS: Artwork[] = [
     audioDurationSeconds: 145,
     initialDistanceMeters: 18,
     compassBearingDeg: 35,
+    lat: 24.7438,
+    lng: 46.5738,
     image: horizonPortalImg,
-    walkingDirectionAr: 'امشِ للأمام 18 متراً نحو المدخل الرئيسي لهنجر بينالي الدرعية (JAX 01)',
-    walkingDirectionEn: 'Walk straight 18 meters toward the main entrance of Diriyah Biennale (JAX 01)',
+    walkingDirectionAr: 'امشِ للأمام نحو المدخل الرئيسي لهنجر بينالي الدرعية (JAX 01)',
+    walkingDirectionEn: 'Walk straight toward the main entrance of Diriyah Biennale (JAX 01)',
     accentColor: '#00F0FF'
   },
   {
@@ -143,6 +170,8 @@ export const JAX_ARTWORKS: Artwork[] = [
     audioDurationSeconds: 170,
     initialDistanceMeters: 38,
     compassBearingDeg: 110,
+    lat: 24.7421,
+    lng: 46.5749,
     image: clayMonumentImg,
     walkingDirectionAr: 'انعطف يميناً بعد الممشى الحجري باتجاه حديقة المنحوتات المفتوحة (JAX 12)',
     walkingDirectionEn: 'Turn right past the stone walkway toward Outdoor Sculpture Garden (JAX 12)',
@@ -172,6 +201,8 @@ export const JAX_ARTWORKS: Artwork[] = [
     audioDurationSeconds: 130,
     initialDistanceMeters: 55,
     compassBearingDeg: 195,
+    lat: 24.7432,
+    lng: 46.5742,
     image: digitalArtImg,
     walkingDirectionAr: 'واصل السير مستقيماً عبر البوليفارد الأوسط نحو هنجر الفنون الرقمية (JAX 03)',
     walkingDirectionEn: 'Continue straight down the central boulevard to Digital Art Lab (JAX 03)',
@@ -201,6 +232,8 @@ export const JAX_ARTWORKS: Artwork[] = [
     audioDurationSeconds: 155,
     initialDistanceMeters: 45,
     compassBearingDeg: 275,
+    lat: 24.7428,
+    lng: 46.5746,
     image: districtAerialImg,
     walkingDirectionAr: 'اتجه غرباً باتجاه جاكس كافيه والساحة المركزية ومتاجر التصميم (JAX 15)',
     walkingDirectionEn: 'Head west towards JAX Social, specialty coffee and concept stores (JAX 15)',
@@ -223,6 +256,8 @@ export const JAX_HANGARS: HangarLocation[] = [
     mapY: 32,
     distanceMeters: 18,
     bearingDeg: 35,
+    lat: 24.7438,
+    lng: 46.5738,
     featuredArtworkId: 'art_horizon_portal',
     image: horizonPortalImg
   },
@@ -240,6 +275,8 @@ export const JAX_HANGARS: HangarLocation[] = [
     mapY: 22,
     distanceMeters: 55,
     bearingDeg: 195,
+    lat: 24.7432,
+    lng: 46.5742,
     featuredArtworkId: 'art_light_prisms',
     image: digitalArtImg
   },
@@ -257,6 +294,8 @@ export const JAX_HANGARS: HangarLocation[] = [
     mapY: 40,
     distanceMeters: 85,
     bearingDeg: 320,
+    lat: 24.7426,
+    lng: 46.5755,
     featuredArtworkId: 'art_clay_helix',
     image: clayMonumentImg
   },
@@ -274,6 +313,8 @@ export const JAX_HANGARS: HangarLocation[] = [
     mapY: 65,
     distanceMeters: 38,
     bearingDeg: 110,
+    lat: 24.7421,
+    lng: 46.5749,
     featuredArtworkId: 'art_clay_helix',
     image: clayMonumentImg
   },
@@ -291,6 +332,8 @@ export const JAX_HANGARS: HangarLocation[] = [
     mapY: 78,
     distanceMeters: 45,
     bearingDeg: 275,
+    lat: 24.7428,
+    lng: 46.5746,
     featuredArtworkId: 'art_district_esplanade',
     image: districtAerialImg
   }

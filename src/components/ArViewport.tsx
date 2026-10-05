@@ -10,7 +10,11 @@ import {
   ChevronLeft,
   ChevronRight,
   Target,
-  Zap
+  Zap,
+  MapPin,
+  Check,
+  RotateCw,
+  Sparkles
 } from 'lucide-react';
 import { Artwork, HangarLocation } from '../data/jaxData';
 
@@ -19,6 +23,7 @@ interface ArViewportProps {
   hangars: HangarLocation[];
   isSimulatedCamera: boolean;
   isPowerSaving?: boolean;
+  realGpsDistance?: number | null;
   onSnapshotReady: (dataUrl: string) => void;
   triggerSnapshot: boolean;
   onSnapshotCaptured: () => void;
@@ -32,6 +37,7 @@ export const ArViewport: React.FC<ArViewportProps> = ({
   hangars,
   isSimulatedCamera,
   isPowerSaving = false,
+  realGpsDistance = null,
   onSnapshotReady,
   triggerSnapshot,
   onSnapshotCaptured,
@@ -46,7 +52,10 @@ export const ArViewport: React.FC<ArViewportProps> = ({
   const [deviceHeading, setDeviceHeading] = useState<number>(35);
   const [manualHeadingOffset, setManualHeadingOffset] = useState<number>(0);
   const [isScanning, setIsScanning] = useState<boolean>(false);
-  const [recognizedObject, setRecognizedObject] = useState<Artwork | null>(artwork);
+
+  // Manual arrival confirmation override (when user is standing in front of the artwork)
+  const [isConfirmedAtLocation, setIsConfirmedAtLocation] = useState<boolean>(false);
+  const [showRecognitionModal, setShowRecognitionModal] = useState<boolean>(false);
 
   // Throttling timestamp for orientation updates
   const lastOrientationUpdateRef = useRef<number>(0);
@@ -55,17 +64,34 @@ export const ArViewport: React.FC<ArViewportProps> = ({
   const isDraggingRef = useRef<boolean>(false);
   const startXRef = useRef<number>(0);
 
+  // Compute effective distance: if user confirmed or GPS is <= 5m, distance is 0
+  const effectiveDistance = isConfirmedAtLocation
+    ? 0
+    : realGpsDistance !== null && realGpsDistance <= 500
+    ? realGpsDistance
+    : artwork.initialDistanceMeters;
+
+  const isUserAtArtwork = isConfirmedAtLocation || (realGpsDistance !== null && realGpsDistance <= 6);
+
   // Total calculated heading combining sensor + manual drag adjustment
   const currentHeading = ((deviceHeading + manualHeadingOffset) % 360 + 360) % 360;
 
   // Angular delta between target physical bearing and camera heading
   const rawDiff = artwork.compassBearingDeg - currentHeading;
   const deltaBearing = ((rawDiff + 540) % 360) - 180; // Range: -180 to +180 deg
-  const isAligned = Math.abs(deltaBearing) <= 14;
-  const turnLeft = deltaBearing < -14;
-  const turnRight = deltaBearing > 14;
 
-  // Real Camera stream setup with power-saving frame-rate optimization
+  // If user is at artwork, treat as aligned immediately!
+  const isAligned = isUserAtArtwork || Math.abs(deltaBearing) <= 18;
+  const turnLeft = !isUserAtArtwork && deltaBearing < -18;
+  const turnRight = !isUserAtArtwork && deltaBearing > 18;
+
+  // Reset confirmation when switching artwork
+  useEffect(() => {
+    setIsConfirmedAtLocation(false);
+    setShowRecognitionModal(false);
+  }, [artwork.id]);
+
+  // Real Camera stream setup
   useEffect(() => {
     let stream: MediaStream | null = null;
 
@@ -103,32 +129,52 @@ export const ArViewport: React.FC<ArViewportProps> = ({
     };
   }, [isSimulatedCamera, isPowerSaving]);
 
-  // Sync recognized artwork when user picks another
+  // Enhanced Device Orientation Listener (Supports Android Chrome deviceorientationabsolute)
   useEffect(() => {
-    setRecognizedObject(artwork);
-  }, [artwork.id]);
-
-  // Real Device orientation / Gyroscope listener with dynamic refresh rate throttling
-  useEffect(() => {
-    const handleOrientation = (e: DeviceOrientationEvent) => {
+    const handleOrientation = (e: any) => {
       const now = performance.now();
-      // Throttle refresh rate to 15 FPS (~66ms) in power-saving mode vs 60 FPS (~16ms) in normal mode
       const minIntervalMs = isPowerSaving ? 66 : 16;
       if (now - lastOrientationUpdateRef.current < minIntervalMs) return;
       lastOrientationUpdateRef.current = now;
 
-      if (e.alpha !== null) {
-        setDeviceHeading(Math.round(e.alpha));
+      let heading: number | null = null;
+      if (e.webkitCompassHeading !== undefined && e.webkitCompassHeading !== null) {
+        heading = e.webkitCompassHeading;
+      } else if (e.alpha !== null && e.alpha !== undefined) {
+        // Standard compass heading on Android Chrome:
+        heading = (360 - e.alpha) % 360;
+      }
+
+      if (heading !== null) {
+        setDeviceHeading(Math.round(heading));
       }
     };
 
-    if (typeof window !== 'undefined' && window.DeviceOrientationEvent) {
+    // Standard Android Chrome absolute orientation
+    if (typeof window !== 'undefined') {
+      window.addEventListener('deviceorientationabsolute', handleOrientation);
       window.addEventListener('deviceorientation', handleOrientation);
     }
     return () => {
-      window.removeEventListener('deviceorientation', handleOrientation);
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('deviceorientationabsolute', handleOrientation);
+        window.removeEventListener('deviceorientation', handleOrientation);
+      }
     };
   }, [isPowerSaving]);
+
+  // One-tap compass calibration & instant alignment
+  const calibrateHeadingToTarget = () => {
+    // Offset manual heading so deltaBearing becomes 0
+    setManualHeadingOffset(artwork.compassBearingDeg - deviceHeading);
+  };
+
+  // Instant Arrival Confirmation (for when user is standing right in front of the artwork)
+  const confirmArrivalAtArtwork = () => {
+    setIsConfirmedAtLocation(true);
+    calibrateHeadingToTarget();
+    setShowRecognitionModal(true);
+  };
 
   // Touch drag to manually calibrate / rotate heading
   const handlePointerDown = (e: React.PointerEvent) => {
@@ -147,13 +193,13 @@ export const ArViewport: React.FC<ArViewportProps> = ({
     isDraggingRef.current = false;
   };
 
-  // Real-time scan simulation trigger
+  // Visual scan trigger
   const runVisionScan = () => {
     setIsScanning(true);
     setTimeout(() => {
       setIsScanning(false);
-      setRecognizedObject(artwork);
-    }, 1200);
+      confirmArrivalAtArtwork();
+    }, 1000);
   };
 
   // Real photo snapshot compositing
@@ -250,7 +296,7 @@ export const ArViewport: React.FC<ArViewportProps> = ({
         <div className="absolute inset-0 z-10 pointer-events-none bg-gradient-to-t from-black/60 via-transparent to-black/50" />
       )}
 
-      {/* 4. Directional Edge Glow Indicators */}
+      {/* 4. Directional Edge Glow Indicators (Disabled once user arrived!) */}
       {turnLeft && (
         <div
           className={`absolute inset-y-0 left-0 w-24 bg-gradient-to-r from-cyan-400/25 via-cyan-400/10 to-transparent pointer-events-none z-20 ${
@@ -266,7 +312,7 @@ export const ArViewport: React.FC<ArViewportProps> = ({
         />
       )}
 
-      {/* 5. Directional Chevron Indicators */}
+      {/* 5. Directional Chevron Indicators (Hidden if arrived or aligned) */}
       {turnLeft && (
         <div
           className={`absolute left-4 top-1/2 -translate-y-1/2 z-30 pointer-events-none flex items-center gap-1.5 ${
@@ -311,7 +357,9 @@ export const ArViewport: React.FC<ArViewportProps> = ({
       <div className="absolute inset-0 z-10 pointer-events-none flex flex-col items-center justify-center p-8">
         <div
           className={`relative w-72 h-72 md:w-80 md:h-80 rounded-2xl border transition-all duration-300 ${
-            isAligned
+            isUserAtArtwork
+              ? 'border-emerald-400 shadow-[0_0_35px_rgba(52,211,153,0.5)] bg-emerald-400/10'
+              : isAligned
               ? 'border-cyan-400 shadow-[0_0_25px_rgba(0,240,255,0.4)] bg-cyan-400/5'
               : 'border-cyan-400/20'
           }`}
@@ -319,60 +367,72 @@ export const ArViewport: React.FC<ArViewportProps> = ({
           {/* Corner Brackets */}
           <div
             className={`absolute -top-1 -left-1 w-6 h-6 border-t-2 border-l-2 transition-colors ${
-              isAligned ? 'border-cyan-300' : 'border-cyan-400'
+              isUserAtArtwork ? 'border-emerald-400' : isAligned ? 'border-cyan-300' : 'border-cyan-400'
             }`}
           />
           <div
             className={`absolute -top-1 -right-1 w-6 h-6 border-t-2 border-r-2 transition-colors ${
-              isAligned ? 'border-cyan-300' : 'border-cyan-400'
+              isUserAtArtwork ? 'border-emerald-400' : isAligned ? 'border-cyan-300' : 'border-cyan-400'
             }`}
           />
           <div
             className={`absolute -bottom-1 -left-1 w-6 h-6 border-b-2 border-l-2 transition-colors ${
-              isAligned ? 'border-cyan-300' : 'border-cyan-400'
+              isUserAtArtwork ? 'border-emerald-400' : isAligned ? 'border-cyan-300' : 'border-cyan-400'
             }`}
           />
           <div
             className={`absolute -bottom-1 -right-1 w-6 h-6 border-b-2 border-r-2 transition-colors ${
-              isAligned ? 'border-cyan-300' : 'border-cyan-400'
+              isUserAtArtwork ? 'border-emerald-400' : isAligned ? 'border-cyan-300' : 'border-cyan-400'
             }`}
           />
 
           {/* Center Crosshair Target */}
           <div className="absolute inset-0 flex items-center justify-center">
             <div
-              className={`w-9 h-9 rounded-full border flex items-center justify-center transition-all ${
-                isAligned
+              className={`w-10 h-10 rounded-full border flex items-center justify-center transition-all ${
+                isUserAtArtwork
+                  ? 'border-emerald-300 scale-110 shadow-[0_0_20px_#34D399] bg-emerald-400/25'
+                  : isAligned
                   ? 'border-cyan-300 scale-110 shadow-[0_0_15px_#00F0FF] bg-cyan-400/20'
                   : 'border-cyan-400/30'
               }`}
             >
               <div
-                className={`w-2 h-2 rounded-full transition-all ${
-                  isAligned ? 'bg-white shadow-[0_0_10px_#00F0FF]' : 'bg-cyan-400'
+                className={`w-2.5 h-2.5 rounded-full transition-all ${
+                  isUserAtArtwork
+                    ? 'bg-emerald-300 shadow-[0_0_12px_#34D399]'
+                    : isAligned
+                    ? 'bg-white shadow-[0_0_10px_#00F0FF]'
+                    : 'bg-cyan-400'
                 }`}
               />
             </div>
           </div>
 
-          {/* Active Scan Line (disabled in power-saving mode) */}
-          {isScanning && !isPowerSaving && (
+          {/* Active Scan Line */}
+          {isScanning && (
             <div className="absolute inset-x-2 h-0.5 bg-gradient-to-r from-transparent via-cyan-400 to-transparent shadow-[0_0_12px_#00F0FF] animate-scan" />
           )}
 
           {/* Target Alignment & Status Badge */}
-          <div className="absolute -top-10 inset-x-0 flex justify-center">
-            {isAligned ? (
-              <div
-                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-cyan-500/20 border border-cyan-400 text-xs font-bold text-cyan-200 backdrop-blur-md ${
-                  isPowerSaving ? '' : 'animate-pulse'
-                }`}
-              >
+          <div className="absolute -top-11 inset-x-0 flex justify-center">
+            {isUserAtArtwork ? (
+              <div className="flex items-center gap-1.5 px-4 py-1.5 rounded-full bg-emerald-500/20 border border-emerald-400 text-xs font-bold text-emerald-200 shadow-[0_0_20px_rgba(52,211,153,0.4)] backdrop-blur-md">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                <span>
+                  {isArabic
+                    ? `أنت في الموقع: ${artwork.titleAr}`
+                    : `At Location: ${artwork.titleEn}`}
+                </span>
+                <span className="text-emerald-300 font-mono">0m</span>
+              </div>
+            ) : isAligned ? (
+              <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-cyan-500/20 border border-cyan-400 text-xs font-bold text-cyan-200 backdrop-blur-md">
                 <Target className="w-4 h-4 text-cyan-300" />
                 <span>
                   {isArabic
-                    ? `تمت المحاذاة: ${artwork.titleAr} (${Math.round(artwork.compassBearingDeg)}°)`
-                    : `Aligned: ${artwork.titleEn} (${Math.round(artwork.compassBearingDeg)}°)`}
+                    ? `تمت المحاذاة: ${artwork.titleAr}`
+                    : `Aligned: ${artwork.titleEn}`}
                 </span>
                 <span className="text-cyan-400 font-mono">LOCKED</span>
               </div>
@@ -390,72 +450,187 @@ export const ArViewport: React.FC<ArViewportProps> = ({
       </div>
 
       {/* 7. Real AR Walking Navigation Ribbon Overlaid on Camera */}
-      <div className="absolute top-24 inset-x-4 max-w-lg mx-auto z-20 pointer-events-auto">
-        <div className="bg-[#090c14]/90 backdrop-blur-xl border border-cyan-500/30 rounded-2xl p-3.5 shadow-2xl flex items-center justify-between gap-3 text-xs">
-          <div className="flex items-center gap-3">
-            <div
-              className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition-colors ${
-                isAligned
-                  ? 'bg-cyan-400 text-stone-950 shadow-[0_0_15px_#00F0FF]'
-                  : 'bg-cyan-500/20 border border-cyan-400/40 text-cyan-400'
+      <div className="absolute top-20 inset-x-3 max-w-lg mx-auto z-20 pointer-events-auto">
+        <div className="bg-[#090c14]/95 backdrop-blur-xl border border-cyan-500/40 rounded-2xl p-3.5 shadow-2xl flex flex-col gap-2.5">
+          <div className="flex items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-3">
+              <div
+                className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition-colors ${
+                  isUserAtArtwork
+                    ? 'bg-emerald-400 text-stone-950 shadow-[0_0_15px_#34D399]'
+                    : isAligned
+                    ? 'bg-cyan-400 text-stone-950 shadow-[0_0_15px_#00F0FF]'
+                    : 'bg-cyan-500/20 border border-cyan-400/40 text-cyan-400'
+                }`}
+              >
+                <Navigation className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-cyan-400/10 text-cyan-300 border border-cyan-400/20">
+                    {artwork.hangarCode}
+                  </span>
+                  <span
+                    className={`font-mono font-bold text-xs ${
+                      isUserAtArtwork ? 'text-emerald-400' : 'text-cyan-400'
+                    }`}
+                  >
+                    {effectiveDistance}m
+                  </span>
+                  {isUserAtArtwork && (
+                    <span className="text-[10px] font-bold text-emerald-300 bg-emerald-500/20 border border-emerald-500/30 px-1.5 rounded">
+                      {isArabic ? 'تم الوصول!' : 'Arrived!'}
+                    </span>
+                  )}
+                </div>
+                <p className="text-white font-medium text-xs mt-0.5 leading-snug">
+                  {isUserAtArtwork
+                    ? isArabic
+                      ? 'أنت أمام العمل الفني مباشرة، انقر على فحص أو استمع للشرح الصوتي'
+                      : 'You are directly at the artwork location'
+                    : isArabic
+                    ? artwork.walkingDirectionAr
+                    : artwork.walkingDirectionEn}
+                </p>
+              </div>
+            </div>
+
+            {/* Quick Scan Button */}
+            <button
+              onClick={runVisionScan}
+              className="flex items-center gap-1 px-3 py-2 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-stone-950 font-bold text-[11px] transition shadow-md shadow-cyan-400/20 shrink-0"
+              title={isArabic ? 'فحص ومسح المعلم' : 'Scan Landmark'}
+            >
+              <Scan className="w-3.5 h-3.5" />
+              <span>{isArabic ? 'مسح' : 'Scan'}</span>
+            </button>
+          </div>
+
+          {/* Quick Arrival & Compass Calibration Strip (Crucial for on-site visitors!) */}
+          <div className="flex items-center gap-2 pt-2 border-t border-white/10 text-[11px]">
+            {/* "I Am in front of the artwork right now" button */}
+            <button
+              onClick={confirmArrivalAtArtwork}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg font-bold transition ${
+                isUserAtArtwork
+                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/50'
+                  : 'bg-cyan-500/20 text-cyan-200 border border-cyan-400/40 hover:bg-cyan-500/30'
               }`}
             >
-              <Navigation className="w-5 h-5" />
+              <MapPin className="w-3.5 h-3.5 text-cyan-400" />
+              <span>
+                {isArabic
+                  ? isUserAtArtwork
+                    ? '✅ مؤكد: أنا في الموقع'
+                    : '📍 أنا أمام العمل الآن (تأكيد)'
+                  : '📍 I am here now'}
+              </span>
+            </button>
+
+            {/* "Align Compass" calibration button */}
+            <button
+              onClick={calibrateHeadingToTarget}
+              className="flex items-center gap-1 py-1.5 px-2.5 rounded-lg bg-white/10 hover:bg-white/15 text-stone-300 text-[11px] transition border border-white/10 shrink-0"
+              title={isArabic ? 'معايرة البوصلة مع المعلم' : 'Align Compass'}
+            >
+              <RotateCw className="w-3 h-3 text-cyan-400" />
+              <span>{isArabic ? 'معايرة' : 'Align'}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* 8. Real Ground Path Stepping Markers (Hidden when arrived) */}
+      {!isUserAtArtwork && (
+        <div className="absolute bottom-40 inset-x-0 z-10 pointer-events-none flex justify-center">
+          <div
+            className={`flex flex-col items-center gap-3 opacity-80 ${
+              isPowerSaving ? 'opacity-60' : 'animate-pulse'
+            }`}
+          >
+            <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-cyan-500/20 border border-cyan-400/40 text-[10px] text-cyan-300 font-bold backdrop-blur-md">
+              <Footprints className="w-3 h-3 text-cyan-400" />
+              <span>{isArabic ? 'مسار المشي الميداني' : 'Walking Path'}</span>
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-cyan-400/10 text-cyan-300 border border-cyan-400/20">
+            <div className="w-2 h-2 rounded-full bg-cyan-400 shadow-[0_0_8px_#00F0FF]" />
+            <div className="w-3 h-3 rounded-full bg-cyan-400/60" />
+            <div className="w-4 h-4 rounded-full bg-cyan-400/30" />
+          </div>
+        </div>
+      )}
+
+      {/* 9. ON-SITE RECOGNITION CONFIRMATION POPUP (Triggered on arrival or Scan) */}
+      {showRecognitionModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
+          <div className="bg-[#0b0e18] border border-cyan-400/80 rounded-2xl max-w-sm w-full p-5 text-stone-100 shadow-[0_0_35px_rgba(0,240,255,0.3)] animate-in fade-in zoom-in-95">
+            {/* Header Badge */}
+            <div className="flex items-center justify-between pb-3 border-b border-white/10">
+              <div className="flex items-center gap-1.5 text-xs text-emerald-400 font-bold">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                <span>{isArabic ? 'تم التحقق من المعلم الميداني' : 'Landmark Verified'}</span>
+              </div>
+              <button
+                onClick={() => setShowRecognitionModal(false)}
+                className="p-1 rounded-full text-stone-400 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Artwork Photo & Info */}
+            <div className="my-3 flex items-center gap-3 bg-black/40 p-2.5 rounded-xl border border-white/5">
+              <img
+                src={artwork.image}
+                alt={artwork.titleAr}
+                className="w-16 h-16 rounded-lg object-cover border border-white/10 shrink-0"
+              />
+              <div className="min-w-0">
+                <span className="px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 text-[10px] font-bold">
                   {artwork.hangarCode}
                 </span>
-                <span className="font-mono text-cyan-400 font-bold text-xs">
-                  {artwork.initialDistanceMeters}m
+                <h4 className="text-xs font-bold text-white truncate mt-1">
+                  {isArabic ? artwork.titleAr : artwork.titleEn}
+                </h4>
+                <p className="text-[11px] text-stone-400 truncate">
+                  {isArabic ? artwork.artistAr : artwork.artistEn}
+                </p>
+                <span className="text-[10px] text-emerald-400 font-mono">
+                  {isArabic ? 'المسافة: 0 متر (في الموقع)' : 'Distance: 0m (Here)'}
                 </span>
-                {isAligned && (
-                  <span className="text-[10px] font-bold text-emerald-400 bg-emerald-500/10 px-1.5 rounded">
-                    {isArabic ? 'في مجال الرؤية' : 'In View'}
-                  </span>
-                )}
-                {isPowerSaving && (
-                  <span className="flex items-center gap-0.5 text-[9px] font-bold text-amber-300 bg-amber-500/15 border border-amber-500/30 px-1.5 py-0.5 rounded">
-                    <Zap className="w-2.5 h-2.5" />
-                    <span>15 FPS</span>
-                  </span>
-                )}
               </div>
-              <p className="text-white font-medium text-xs mt-0.5 leading-snug">
-                {isArabic ? artwork.walkingDirectionAr : artwork.walkingDirectionEn}
-              </p>
+            </div>
+
+            <p className="text-xs text-stone-300 leading-relaxed line-clamp-3 mb-4">
+              {isArabic ? artwork.curatorialEssayAr : artwork.curatorialEssayEn}
+            </p>
+
+            {/* Quick Actions */}
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={() => {
+                  setShowRecognitionModal(false);
+                  onOpenAudio();
+                }}
+                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-stone-950 font-bold text-xs transition shadow-md shadow-cyan-400/20"
+              >
+                <Volume2 className="w-4 h-4" />
+                <span>{isArabic ? 'تشغيل المرشد الصوتي للعمل 🎧' : 'Play Audio Guide'}</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setShowRecognitionModal(false);
+                  onOpenDossier();
+                }}
+                className="w-full flex items-center justify-center gap-1.5 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-stone-200 text-xs font-semibold transition"
+              >
+                <Info className="w-3.5 h-3.5 text-stone-400" />
+                <span>{isArabic ? 'قراءة الملف النقدي الكامل' : 'View Full Dossier'}</span>
+              </button>
             </div>
           </div>
-
-          {/* Quick Scan Button */}
-          <button
-            onClick={runVisionScan}
-            className="flex items-center gap-1 px-3 py-2 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-stone-950 font-bold text-[11px] transition shadow-md shadow-cyan-400/20 shrink-0"
-            title={isArabic ? 'إعادة فحص المعلم' : 'Scan Landmark'}
-          >
-            <Scan className="w-3.5 h-3.5" />
-            <span>{isArabic ? 'مسح' : 'Scan'}</span>
-          </button>
         </div>
-      </div>
-
-      {/* 8. Real Ground Path Stepping Markers */}
-      <div className="absolute bottom-40 inset-x-0 z-10 pointer-events-none flex justify-center">
-        <div
-          className={`flex flex-col items-center gap-3 opacity-80 ${
-            isPowerSaving ? 'opacity-60' : 'animate-pulse'
-          }`}
-        >
-          <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-cyan-500/20 border border-cyan-400/40 text-[10px] text-cyan-300 font-bold backdrop-blur-md">
-            <Footprints className="w-3 h-3 text-cyan-400" />
-            <span>{isArabic ? 'مسار المشي الميداني' : 'Walking Path'}</span>
-          </div>
-          <div className="w-2 h-2 rounded-full bg-cyan-400 shadow-[0_0_8px_#00F0FF]" />
-          <div className="w-3 h-3 rounded-full bg-cyan-400/60" />
-          <div className="w-4 h-4 rounded-full bg-cyan-400/30" />
-        </div>
-      </div>
+      )}
     </div>
   );
 };
